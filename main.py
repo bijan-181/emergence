@@ -15,11 +15,13 @@ from typing import Any
 
 from camera.camera import Camera
 from config.settings import Settings
+from core.clock import Clock
 from core.engine import Engine
 from events.bus import EventBus
 from events.types import Event, EventType
 from input.handler import InputHandler
 from input.keyboard import KeyAction
+from renderer.colors import init_colors
 from renderer.terminal import TerminalRenderer
 from ui.sidebar import Sidebar
 from ui.status import StatusBar
@@ -31,10 +33,18 @@ logger = logging.getLogger("emergence")
 class App:
     """Top-level application that owns the curses loop.
 
-    Keyboard actions are dispatched directly in ``_handle_input``
-    (no event bus round-trip) to avoid re-entrant recursion.
-    Mouse actions flow through the event bus because the input
-    handler publishes them asynchronously.
+    Rendering architecture:
+
+    - The terminal is divided into three non-overlapping subwindows:
+      ``sim_win`` (left, simulation grid), ``sidebar_win`` (right),
+      ``status_win`` (bottom row).
+    - Each subsystem renders into its own subwindow independently.
+    - A single ``curses.doupdate()`` flushes all subwindow changes
+      to the physical terminal in one atomic operation — eliminating
+      flicker caused by incremental screen updates.
+    - No ``erase()`` is called on any window.  Every render pass
+      overwrites cell positions unconditionally, which is both
+      faster and flicker-free compared to clear-then-redraw.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -42,12 +52,14 @@ class App:
         self._event_bus = EventBus()
         self._engine = Engine(settings, self._event_bus)
         self._running = True
+        self._debug_mode = False
 
         self._camera: Camera | None = None
         self._input_handler: InputHandler | None = None
         self._renderer: TerminalRenderer | None = None
         self._sidebar: Sidebar | None = None
         self._status_bar: StatusBar | None = None
+        self._clock: Clock | None = None
 
     # ------------------------------------------------------------------
     # Mouse event handlers (via event bus — safe, no re-entrance)
@@ -70,14 +82,57 @@ class App:
             self._engine.world.set(x, y, CellState.ALIVE)
 
     # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
+    def _create_subwindows(self, stdscr: Any) -> None:
+        """Split the terminal into three non-overlapping regions.
+
+        Layout::
+
+            ┌──────────────────┬────────────┐
+            │                  │            │
+            │   sim_win        │ sidebar_win│
+            │   (grid)         │            │
+            │                  │            │
+            ├──────────────────┴────────────┤
+            │          status_win            │
+            └────────────────────────────────┘
+        """
+        max_row, max_col = stdscr.getmaxyx()
+        sidebar_w = self._settings.ui.sidebar_width
+        status_h = 1
+
+        sim_w = max_col - sidebar_w
+        sim_h = max_row - status_h
+
+        # Ensure minimum sizes.
+        sim_w = max(sim_w, 1)
+        sim_h = max(sim_h, 1)
+        sidebar_w = min(sidebar_w, max_col)
+        status_h = min(status_h, max_row)
+
+        sim_win = stdscr.subwin(sim_h, sim_w, 0, 0)
+        sidebar_win = stdscr.subwin(sim_h, sidebar_w, 0, sim_w)
+        status_win = stdscr.subwin(status_h, max_col, sim_h, 0)
+
+        return sim_win, sidebar_win, status_win
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     def _main(self, stdscr: Any) -> None:
         """Curses main loop — called by ``curses.wrapper``."""
+        # Terminal initialisation.
         curses.curs_set(0)
+        curses.noecho()
+        curses.cbreak()
+        stdscr.keypad(True)
         stdscr.nodelay(True)
-        stdscr.timeout(16)
+        stdscr.timeout(0)  # non-blocking getch; we control timing ourselves
+
+        init_colors()
 
         # Enable mouse events.
         mouse_mask = (
@@ -93,17 +148,19 @@ class App:
             mouse_mask |= curses.BUTTON4_CLICKED | curses.BUTTON5_CLICKED
         curses.mousemask(mouse_mask)
 
-        # Initialise subsystems.
-        max_row, max_col = stdscr.getmaxyx()
-        sidebar_w = self._settings.ui.sidebar_width
-        view_w = max_col - sidebar_w
-        view_h = max_row - 1
+        # Create subwindows.
+        sim_win, sidebar_win, status_win = self._create_subwindows(stdscr)
 
-        self._camera = Camera(self._settings.camera, view_w, view_h)
+        # Compute simulation viewport size.
+        sim_h, sim_w = sim_win.getmaxyx()
+        sidebar_w = sidebar_win.getmaxyx()[1]
+
+        self._camera = Camera(self._settings.camera, sim_w, sim_h)
         self._input_handler = InputHandler(self._event_bus, self._camera)
-        self._renderer = TerminalRenderer(stdscr, self._settings.renderer, self._camera, sidebar_w)
-        self._sidebar = Sidebar(stdscr, sidebar_w, self._engine, self._camera)
-        self._status_bar = StatusBar(stdscr, self._engine, self._camera)
+        self._renderer = TerminalRenderer(sim_win, self._settings.renderer, self._camera)
+        self._sidebar = Sidebar(sidebar_win, sidebar_w, self._engine, self._camera)
+        self._status_bar = StatusBar(status_win, self._engine, self._camera)
+        self._clock = Clock(self._settings.simulation.target_fps)
 
         # Subscribe mouse-cell events (these never re-enter the engine).
         self._event_bus.subscribe(EventType.INPUT_CELL_TOGGLE, self._on_cell_toggle)
@@ -114,28 +171,31 @@ class App:
         self._engine.randomize_world()
         self._engine.start()
 
-        # Main loop.
+        # ---- main loop ------------------------------------------------
         while self._running:
-            loop_start = time.monotonic()
+            self._clock.tick()
 
+            # 1. Input (non-blocking).
             key = stdscr.getch()
-            if key != -1:
+            while key != -1:
                 self._handle_input(key)
+                if not self._running:
+                    break
+                key = stdscr.getch()
 
+            # 2. Simulation step.
             if self._engine.is_running:
                 self._engine.step()
 
-            stdscr.erase()
+            # 3. Render — each subwindow writes independently, then one
+            #    atomic doupdate flushes everything.
             self._renderer.render(self._engine.world)
             self._sidebar.render()
             self._status_bar.render()
             curses.doupdate()
 
-            elapsed = time.monotonic() - loop_start
-            frame_interval = 1.0 / max(self._engine.speed, 0.1)
-            sleep_time = frame_interval - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            # 4. Frame pacing.
+            self._clock.sleep_until_next()
 
     # ------------------------------------------------------------------
     # Input dispatch
