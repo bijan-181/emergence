@@ -84,6 +84,18 @@ class InputHandler:
     # Mouse
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_scroll_up(bstate: int) -> bool:
+        if hasattr(curses, "BUTTON4_SCROLLED"):
+            return bool(bstate & curses.BUTTON4_SCROLLED)
+        return bool(bstate & curses.BUTTON4_CLICKED)
+
+    @staticmethod
+    def _is_scroll_down(bstate: int) -> bool:
+        if hasattr(curses, "BUTTON5_SCROLLED"):
+            return bool(bstate & curses.BUTTON5_SCROLLED)
+        return bool(bstate & curses.BUTTON5_CLICKED)
+
     def handle_mouse(self, event: curses.flushinp | object) -> None:
         """Process a curses mouse event and publish the appropriate event."""
         _, mx, my, _, bstate = curses.getmouse()
@@ -111,10 +123,10 @@ class InputHandler:
         elif bstate & curses.BUTTON2_CLICKED:
             button = MouseButton.MIDDLE
             action_type = MouseAction.CLICK
-        elif bstate & curses.BUTTON4_SCROLLED:
+        elif self._is_scroll_up(bstate):
             button = MouseButton.WHEEL_UP
             action_type = MouseAction.SCROLL
-        elif bstate & curses.BUTTON5_SCROLLED:
+        elif self._is_scroll_down(bstate):
             button = MouseButton.WHEEL_DOWN
             action_type = MouseAction.SCROLL
 

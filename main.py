@@ -138,15 +138,19 @@ class App:
         stdscr.timeout(16)   # ~60 fps poll rate
 
         # Enable mouse events.
-        curses.mousemask(
+        mouse_mask = (
             curses.BUTTON1_CLICKED
             | curses.BUTTON1_PRESSED
             | curses.BUTTON1_RELEASED
             | curses.BUTTON2_CLICKED
             | curses.BUTTON3_CLICKED
-            | curses.BUTTON4_SCROLLED
-            | curses.BUTTON5_SCROLLED
         )
+        # BUTTON4_SCROLLED / BUTTON5_SCROLLED exist in Python ≥ 3.12.
+        if hasattr(curses, "BUTTON4_SCROLLED"):
+            mouse_mask |= curses.BUTTON4_SCROLLED | curses.BUTTON5_SCROLLED
+        else:
+            mouse_mask |= curses.BUTTON4_CLICKED | curses.BUTTON5_CLICKED
+        curses.mousemask(mouse_mask)
 
         # Initialise subsystems.
         max_row, max_col = stdscr.getmaxyx()
