@@ -23,6 +23,7 @@ from input.handler import InputHandler
 from input.keyboard import KeyAction
 from renderer.colors import init_colors
 from renderer.terminal import TerminalRenderer
+from ui.layout import Layout
 from ui.sidebar import Sidebar
 from ui.status import StatusBar
 from world.cell import CellState
@@ -35,16 +36,15 @@ class App:
 
     Rendering architecture:
 
-    - The terminal is divided into three non-overlapping subwindows:
-      ``sim_win`` (left, simulation grid), ``sidebar_win`` (right),
-      ``status_win`` (bottom row).
+    - A :class:`~ui.layout.Layout` engine computes region geometry
+      from the current terminal size — no hardcoded positions.
+    - The terminal is divided into three non-overlapping subwindows
+      (simulation, sidebar, status) via ``stdscr.subwin()``.
     - Each subsystem renders into its own subwindow independently.
     - A single ``curses.doupdate()`` flushes all subwindow changes
-      to the physical terminal in one atomic operation — eliminating
-      flicker caused by incremental screen updates.
-    - No ``erase()`` is called on any window.  Every render pass
-      overwrites cell positions unconditionally, which is both
-      faster and flicker-free compared to clear-then-redraw.
+      to the physical terminal in one atomic operation.
+    - On terminal resize (``KEY_RESIZE``), subwindows are destroyed
+      and recreated; the camera viewport is updated to match.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -60,6 +60,10 @@ class App:
         self._sidebar: Sidebar | None = None
         self._status_bar: StatusBar | None = None
         self._clock: Clock | None = None
+        self._layout = Layout(
+            sidebar_width=settings.ui.sidebar_width,
+            status_height=settings.ui.status_height,
+        )
 
     # ------------------------------------------------------------------
     # Mouse event handlers (via event bus — safe, no re-entrance)
@@ -82,41 +86,38 @@ class App:
             self._engine.world.set(x, y, CellState.ALIVE)
 
     # ------------------------------------------------------------------
-    # Layout
+    # Layout / subwindow management
     # ------------------------------------------------------------------
 
-    def _create_subwindows(self, stdscr: Any) -> None:
-        """Split the terminal into three non-overlapping regions.
+    def _build_panels(self, stdscr: Any) -> None:
+        """(Re)create subwindows from the current terminal size.
 
-        Layout::
-
-            ┌──────────────────┬────────────┐
-            │                  │            │
-            │   sim_win        │ sidebar_win│
-            │   (grid)         │            │
-            │                  │            │
-            ├──────────────────┴────────────┤
-            │          status_win            │
-            └────────────────────────────────┘
+        Called at startup and again on every ``KEY_RESIZE`` event.
         """
         max_row, max_col = stdscr.getmaxyx()
-        sidebar_w = self._settings.ui.sidebar_width
-        status_h = 1
+        regions = self._layout.compute(max_row, max_col)
 
-        sim_w = max_col - sidebar_w
-        sim_h = max_row - status_h
+        sim_r = regions["sim"]
+        sb_r = regions["sidebar"]
+        st_r = regions["status"]
 
-        # Ensure minimum sizes.
-        sim_w = max(sim_w, 1)
-        sim_h = max(sim_h, 1)
-        sidebar_w = min(sidebar_w, max_col)
-        status_h = min(status_h, max_row)
+        sim_win = stdscr.subwin(sim_r.height, sim_r.width, sim_r.row, sim_r.col)
+        sidebar_win = stdscr.subwin(sb_r.height, sb_r.width, sb_r.row, sb_r.col)
+        status_win = stdscr.subwin(st_r.height, st_r.width, st_r.row, st_r.col)
 
-        sim_win = stdscr.subwin(sim_h, sim_w, 0, 0)
-        sidebar_win = stdscr.subwin(sim_h, sidebar_w, 0, sim_w)
-        status_win = stdscr.subwin(status_h, max_col, sim_h, 0)
+        self._camera = Camera(self._settings.camera, sim_r.width, sim_r.height)
+        self._renderer = TerminalRenderer(sim_win, self._settings.renderer, self._camera)
+        self._sidebar = Sidebar(sidebar_win, sb_r.width, self._engine, self._camera)
+        self._status_bar = StatusBar(status_win, self._engine, self._camera)
+        self._input_handler = InputHandler(
+            self._event_bus, self._camera, sim_offset_col=sim_r.col,
+        )
 
-        return sim_win, sidebar_win, status_win
+    def _handle_resize(self, stdscr: Any) -> None:
+        """Rebuild all panels after a terminal resize."""
+        curses.endwin()
+        stdscr.refresh()
+        self._build_panels(stdscr)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -130,7 +131,7 @@ class App:
         curses.cbreak()
         stdscr.keypad(True)
         stdscr.nodelay(True)
-        stdscr.timeout(0)  # non-blocking getch; we control timing ourselves
+        stdscr.timeout(0)
 
         init_colors()
 
@@ -148,18 +149,8 @@ class App:
             mouse_mask |= curses.BUTTON4_CLICKED | curses.BUTTON5_CLICKED
         curses.mousemask(mouse_mask)
 
-        # Create subwindows.
-        sim_win, sidebar_win, status_win = self._create_subwindows(stdscr)
-
-        # Compute simulation viewport size.
-        sim_h, sim_w = sim_win.getmaxyx()
-        sidebar_w = sidebar_win.getmaxyx()[1]
-
-        self._camera = Camera(self._settings.camera, sim_w, sim_h)
-        self._input_handler = InputHandler(self._event_bus, self._camera)
-        self._renderer = TerminalRenderer(sim_win, self._settings.renderer, self._camera)
-        self._sidebar = Sidebar(sidebar_win, sidebar_w, self._engine, self._camera)
-        self._status_bar = StatusBar(status_win, self._engine, self._camera)
+        # Build initial layout.
+        self._build_panels(stdscr)
         self._clock = Clock(self._settings.simulation.target_fps)
 
         # Subscribe mouse-cell events (these never re-enter the engine).
@@ -178,10 +169,13 @@ class App:
             # 1. Input (non-blocking).
             key = stdscr.getch()
             while key != -1:
-                self._handle_input(key)
+                self._handle_input(key, stdscr)
                 if not self._running:
                     break
                 key = stdscr.getch()
+
+            # 1b. Continuous drag polling (held mouse buttons).
+            self._input_handler.poll_drag()
 
             # 2. Simulation step.
             if self._engine.is_running:
@@ -201,12 +195,17 @@ class App:
     # Input dispatch
     # ------------------------------------------------------------------
 
-    def _handle_input(self, key: int) -> None:
+    def _handle_input(self, key: int, stdscr: Any) -> None:
         """Dispatch a single key press or mouse event."""
+        # Terminal resize.
+        if key == curses.KEY_RESIZE:
+            self._handle_resize(stdscr)
+            return
+
         # Mouse events.
         if key == curses.KEY_MOUSE:
             try:
-                self._input_handler.handle_mouse(None)
+                self._input_handler.handle_mouse()
             except curses.error:
                 pass
             return
