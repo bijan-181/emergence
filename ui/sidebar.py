@@ -1,11 +1,15 @@
-"""Right sidebar — displays simulation information."""
+"""Right sidebar — displays simulation information.
+
+The sidebar renders into its own curses subwindow, completely
+independent of the simulation grid renderer.
+"""
 
 from __future__ import annotations
 
 import curses
 from typing import TYPE_CHECKING
 
-from renderer.colors import BOLD, DIM, FG_BRIGHT_CYAN, FG_BRIGHT_GREEN, FG_BRIGHT_YELLOW, FG_CYAN, FG_GREEN, FG_YELLOW, RESET
+from renderer.colors import PAIR_SIDEBAR_TITLE as _pair_title
 
 if TYPE_CHECKING:
     from core.engine import Engine
@@ -16,7 +20,7 @@ class Sidebar:
     """Fixed panel on the right side of the terminal.
 
     Parameters:
-        win: The curses window to draw into.
+        win: A subwindow covering the sidebar area only.
         width: Width in columns.
         engine: Simulation engine for status data.
         camera: Camera for viewport data.
@@ -44,22 +48,24 @@ class Sidebar:
     # ------------------------------------------------------------------
 
     def render(self) -> None:
-        """Draw the sidebar contents."""
-        max_row, max_col = self._win.getmaxyx()
-        x_start = max_col - self._width
+        """Draw the sidebar contents into its subwindow.
 
+        Uses overwrite-only strategy — each cell position is written
+        unconditionally, replacing whatever was there before.  No
+        ``erase()`` call.
+        """
+        max_row, max_col = self._win.getmaxyx()
         sections = self._build_sections()
         row = 0
 
         for title, lines in sections:
             if row >= max_row:
                 break
-            # Section title
             header = f" {title} "
             try:
                 self._win.addnstr(
-                    row, x_start, header.ljust(self._width - 1), self._width - 1,
-                    curses.A_BOLD | curses.A_REVERSE,
+                    row, 0, header.ljust(self._width - 1), self._width - 1,
+                    _pair_title(),
                 )
             except curses.error:
                 pass
@@ -69,12 +75,22 @@ class Sidebar:
                 if row >= max_row:
                     break
                 try:
-                    self._win.addnstr(row, x_start, f" {line}".ljust(self._width - 1), self._width - 1)
+                    self._win.addnstr(row, 0, f" {line}".ljust(self._width - 1), self._width - 1)
                 except curses.error:
                     pass
                 row += 1
 
             row += 1  # blank line between sections
+
+        # Fill remaining rows with spaces so stale content is overwritten.
+        while row < max_row:
+            try:
+                self._win.addnstr(row, 0, " " * (self._width - 1), self._width - 1)
+            except curses.error:
+                pass
+            row += 1
+
+        self._win.noutrefresh()
 
     # ------------------------------------------------------------------
     # Data

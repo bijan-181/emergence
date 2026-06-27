@@ -1,11 +1,14 @@
-"""Status bar — bottom line of the terminal."""
+"""Status bar — bottom line of the terminal.
+
+Renders into its own curses subwindow.
+"""
 
 from __future__ import annotations
 
 import curses
 from typing import TYPE_CHECKING
 
-from renderer.colors import DIM, FG_BRIGHT_GREEN, RESET
+from renderer.colors import PAIR_STATUS_BAR as _pair_status
 
 if TYPE_CHECKING:
     from core.engine import Engine
@@ -16,7 +19,7 @@ class StatusBar:
     """One-line status display at the bottom of the terminal.
 
     Parameters:
-        win: The curses window to draw into.
+        win: A subwindow covering the bottom row only.
         engine: Simulation engine for status data.
         camera: Camera for viewport data.
     """
@@ -32,9 +35,8 @@ class StatusBar:
         self._camera = camera
 
     def render(self) -> None:
-        """Draw the status bar at the bottom row."""
+        """Draw the status bar into its subwindow."""
         max_row, max_col = self._win.getmaxyx()
-        row = max_row - 1
 
         e = self._engine
         cam = self._camera
@@ -49,6 +51,8 @@ class StatusBar:
         text = "  │  ".join(parts)
 
         try:
-            self._win.addnstr(row, 0, text.ljust(max_col - 1), max_col - 1, curses.A_REVERSE)
+            self._win.addnstr(0, 0, text.ljust(max_col - 1), max_col - 1, _pair_status())
         except curses.error:
             pass
+
+        self._win.noutrefresh()
