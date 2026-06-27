@@ -698,3 +698,5 @@ Every term in this guide includes:
 This terminology guide ensures consistent communication across the Emergence project. By using these terms consistently in documentation, code, and research papers, we create a clear, precise vocabulary that enables effective communication and reduces confusion.
 
 The terms connect to their biological and computational origins while being precise for the Emergence context. They should be used consistently to maintain clarity and professionalism.
+
+**Note**: The physical laws governing the Emergence universe are documented in `docs/physics/`. These terms describe concepts that operate within those physical constraints.

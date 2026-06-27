@@ -571,3 +571,5 @@ These ADRs establish the fundamental architectural principles of Emergence:
 9. **Accessibility**: Python as primary language (ADR-010)
 
 These decisions will guide the project's development and ensure consistency as it grows.
+
+**Note**: The physical laws governing the Emergence universe are documented in `docs/physics/`. These decisions operate within those physical constraints.

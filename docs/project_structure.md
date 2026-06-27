@@ -523,6 +523,12 @@ docs/
 ├── decisions.md            # Architecture decision records
 ├── concepts.md             # Concept definitions
 ├── terminology.md          # Terminology guide
+├── physics/                # Physics module documentation
+│   ├── README.md           # Physics module overview
+│   ├── world_physics.md    # Physical properties of the universe
+│   ├── game_of_life_rules.md # Cellular automata rules
+│   ├── intervention_rules.md # Agent interaction rules
+│   └── timing_model.md     # Execution timeline
 ├── api/                    # API documentation (future)
 ├── guides/                 # User guides (future)
 └── research/               # Research notes (future)

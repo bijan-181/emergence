@@ -920,3 +920,5 @@ Emergence's architecture is designed for:
 7. **Clarity**: Clear separation of concerns and responsibilities
 
 The architecture serves the research vision: a persistent, living digital organism that evolves continuously, guided by intelligence, accumulating the depth and complexity that only time and persistence can create.
+
+**Note**: The physical laws governing the Emergence universe are documented in `docs/physics/`. All implementations must conform to these specifications.

@@ -37,6 +37,8 @@ The roadmap spans approximately 24-36 months of active development, with ongoing
 - [ ] Write unit tests for core components
 - [ ] Create basic configuration system
 
+**Note**: The physics of the Emergence universe are documented in `docs/physics/`. All implementations must conform to these specifications.
+
 ### Expected Deliverables
 
 - Working simulation that runs Conway's Game of Life

@@ -517,6 +517,8 @@ The generation counter increments after each complete cycle. The World at genera
 
 These concepts form the vocabulary of Emergence. They should be used consistently in all documentation, code, and communication. When new concepts are introduced, they should be defined here first.
 
+**Note**: The physical laws governing the Emergence universe are documented in `docs/physics/`. These concepts operate within those physical constraints.
+
 The concepts are interconnected:
 
 ```

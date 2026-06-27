@@ -151,3 +151,5 @@ The world at any moment is the product of its entire past. This historical depth
 This manifesto is itself persistent. As Emergence evolves, so too will this document. It is the first chapter in an ongoing story—the story of a world that lives, remembers, and grows.
 
 The world has been created. The world will never be reset. The story begins now.
+
+**Note**: The physical laws governing the Emergence universe are documented in `docs/physics/`. These laws define the immutable substrate upon which the vision described above is realized.
