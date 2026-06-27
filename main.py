@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import curses
 import logging
+import os
 import time
 from typing import Any
 
@@ -29,6 +30,22 @@ from ui.status import StatusBar
 from world.cell import CellState
 
 logger = logging.getLogger("emergence")
+
+
+def _setup_logging() -> None:
+    """Configure logging to write to a file, never to the terminal.
+
+    During curses operation any output to stdout/stderr corrupts the
+    screen.  Logs go to ``emergence.log`` in the working directory.
+    """
+    log_path = os.path.join(os.getcwd(), "emergence.log")
+    handler = logging.FileHandler(log_path, mode="w")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+    )
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(handler)
 
 
 class App:
@@ -252,10 +269,7 @@ class App:
 
     def run(self) -> None:
         """Launch the application."""
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        )
+        _setup_logging()
         logger.info("Emergence sandbox starting")
         try:
             curses.wrapper(self._main)
