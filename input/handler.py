@@ -48,36 +48,6 @@ class InputHandler:
             return None
 
         logger.debug("Key pressed: %s", action.name)
-
-        if action == KeyAction.TOGGLE_PAUSE:
-            self._event_bus.publish(Event(EventType.INPUT_CELL_TOGGLE))
-        elif action == KeyAction.STEP:
-            self._event_bus.publish(Event(EventType.SIMULATION_STEP))
-        elif action == KeyAction.RESET:
-            self._event_bus.publish(Event(EventType.SIMULATION_RESET))
-        elif action == KeyAction.CLEAR:
-            self._event_bus.publish(Event(EventType.WORLD_CLEARED))
-        elif action == KeyAction.RANDOMIZE:
-            self._event_bus.publish(Event(EventType.WORLD_RANDOMIZED))
-        elif action == KeyAction.SPEED_UP:
-            self._event_bus.publish(
-                Event(EventType.SIMULATION_SPEED_CHANGED, {"delta": 1})
-            )
-        elif action == KeyAction.SPEED_DOWN:
-            self._event_bus.publish(
-                Event(EventType.SIMULATION_SPEED_CHANGED, {"delta": -1})
-            )
-        elif action == KeyAction.PAN_UP:
-            self._camera.pan(0, -self._camera._cfg.pan_step)
-        elif action == KeyAction.PAN_DOWN:
-            self._camera.pan(0, self._camera._cfg.pan_step)
-        elif action == KeyAction.PAN_LEFT:
-            self._camera.pan(-self._camera._cfg.pan_step, 0)
-        elif action == KeyAction.PAN_RIGHT:
-            self._camera.pan(self._camera._cfg.pan_step, 0)
-        elif action == KeyAction.ZOOM_RESET:
-            self._camera.reset_zoom()
-
         return action
 
     # ------------------------------------------------------------------
