@@ -44,11 +44,12 @@ class StatusBar:
         parts = [
             f"Gen: {e.generation}",
             f"Alive: {e.alive_count}",
-            f"Speed: {e.speed:.1f}",
+            f"Speed: {e.speed:.1f} gen/s",
+            f"TPS: {e.tps:.1f}",
             f"Zoom: {cam.zoom:.1f}x",
         ]
 
-        text = "  │  ".join(parts)
+        text = "  |  ".join(parts)
 
         try:
             self._win.addnstr(0, 0, text.ljust(max_col - 1), max_col - 1, _pair_status())

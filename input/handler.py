@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import curses
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from events.bus import EventBus
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CLICK_THRESHOLD = 10
+CLICK_TIME_LIMIT = 0.3
+
 
 class InputHandler:
     """Process raw terminal input and publish corresponding events.
@@ -23,25 +27,28 @@ class InputHandler:
     Parameters:
         event_bus: Shared event bus.
         camera: Camera for coordinate conversion.
-        sim_offset_col: Column offset of the simulation area (sidebar width).
-                        Mouse x-coordinates are adjusted by this value
-                        before being passed to the camera.
+        sim_area_width: Width of the simulation area in columns.
+                        Mouse events beyond this column are in the sidebar.
     """
 
     def __init__(
         self,
         event_bus: EventBus,
         camera: Camera,
-        sim_offset_col: int = 0,
+        sim_area_width: int = 80,
     ) -> None:
         self._event_bus = event_bus
         self._camera = camera
-        self._sim_offset_col = sim_offset_col
+        self._sim_area_width = sim_area_width
         self._key_bindings = build_default_bindings(curses)
         self._dragging = False
+        self._drag_confirmed = False
         self._drag_button: MouseButton | None = None
         self._last_mx: int = 0
         self._last_my: int = 0
+        self._press_mx: int = 0
+        self._press_my: int = 0
+        self._press_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -66,125 +73,184 @@ class InputHandler:
 
     @staticmethod
     def _is_scroll_up(bstate: int) -> bool:
+        mask = 0
         if hasattr(curses, "BUTTON4_SCROLLED"):
-            return bool(bstate & curses.BUTTON4_SCROLLED)
-        return bool(bstate & curses.BUTTON4_CLICKED)
+            mask |= curses.BUTTON4_SCROLLED
+        if hasattr(curses, "BUTTON4_PRESSED"):
+            mask |= curses.BUTTON4_PRESSED
+        if not mask and hasattr(curses, "BUTTON4_CLICKED"):
+            mask = curses.BUTTON4_CLICKED
+        return bool(bstate & mask)
 
     @staticmethod
     def _is_scroll_down(bstate: int) -> bool:
+        mask = 0
         if hasattr(curses, "BUTTON5_SCROLLED"):
-            return bool(bstate & curses.BUTTON5_SCROLLED)
-        return bool(bstate & curses.BUTTON5_CLICKED)
+            mask |= curses.BUTTON5_SCROLLED
+        if hasattr(curses, "BUTTON5_PRESSED"):
+            mask |= curses.BUTTON5_PRESSED
+        if not mask and hasattr(curses, "BUTTON5_CLICKED"):
+            mask = curses.BUTTON5_CLICKED
+        return bool(bstate & mask)
+
+    @staticmethod
+    def _is_motion(bstate: int) -> bool:
+        """Check if the event is a mouse motion event."""
+        if hasattr(curses, "REPORT_MOUSE_POSITION"):
+            return bool(bstate & curses.REPORT_MOUSE_POSITION)
+        return False
 
     def _screen_to_world(self, mx: int, my: int):
         """Convert raw screen coordinates to world coordinates.
 
-        Adjusts *mx* by the simulation area offset so that clicks
-        inside the sidebar are ignored (negative resulting x).
+        The simulation area starts at column 0, so mx is used directly.
         """
-        adj_col = mx - self._sim_offset_col
-        return self._camera.screen_to_world(adj_col, my)
+        return self._camera.screen_to_world(mx, my)
 
     def handle_mouse(self) -> None:
         """Process a curses mouse event and publish the appropriate event."""
-        _, mx, my, _, bstate = curses.getmouse()
-
-        # Ignore clicks that land in the sidebar region.
-        if mx >= self._sim_offset_col and not (
-            self._is_scroll_up(bstate)
-            or self._is_scroll_down(bstate)
-            or (bstate & curses.BUTTON2_CLICKED)
-            or (bstate & curses.BUTTON2_PRESSED)
-        ):
+        try:
+            _, mx, my, _, bstate = curses.getmouse()
+        except curses.error as exc:
+            logger.warning("getmouse() failed: %s", exc)
             return
 
-        # Determine button from bstate bitmask.
-        button: MouseButton | None = None
-        action_type: MouseAction | None = None
+        logger.debug("Mouse event: mx=%d my=%d bstate=0x%x", mx, my, bstate)
 
-        if bstate & curses.BUTTON1_CLICKED:
-            button = MouseButton.LEFT
-            action_type = MouseAction.CLICK
-        elif bstate & curses.BUTTON1_PRESSED:
-            button = MouseButton.LEFT
-            action_type = MouseAction.DRAG_START
+        # Handle scroll events (zoom) — always process regardless of position.
+        if self._is_scroll_up(bstate):
+            self._camera.zoom_in()
+            logger.debug("Scroll up → zoom %.2f", self._camera.zoom)
+            return
+        if self._is_scroll_down(bstate):
+            self._camera.zoom_out()
+            logger.debug("Scroll down → zoom %.2f", self._camera.zoom)
+            return
+
+        # Handle motion events during drag.
+        if self._is_motion(bstate) and self._dragging:
+            self._handle_drag_motion(mx, my)
+            return
+
+        # --- Left button ---
+        if bstate & curses.BUTTON1_PRESSED:
             self._dragging = True
-            self._drag_button = button
-        elif bstate & curses.BUTTON1_RELEASED:
-            button = MouseButton.LEFT
-            action_type = MouseAction.DRAG_END
-            self._dragging = False
-            self._drag_button = None
-        elif bstate & curses.BUTTON3_CLICKED:
-            button = MouseButton.RIGHT
-            action_type = MouseAction.CLICK
-        elif bstate & curses.BUTTON2_CLICKED:
-            button = MouseButton.MIDDLE
-            action_type = MouseAction.CLICK
-        elif bstate & curses.BUTTON2_PRESSED:
-            button = MouseButton.MIDDLE
-            action_type = MouseAction.DRAG_START
-            self._dragging = True
-            self._drag_button = MouseButton.MIDDLE
+            self._drag_confirmed = False
+            self._drag_button = MouseButton.LEFT
+            self._press_mx = mx
+            self._press_my = my
+            self._press_time = time.monotonic()
             self._last_mx = mx
             self._last_my = my
             return
-        elif bstate & curses.BUTTON2_RELEASED:
-            button = MouseButton.MIDDLE
-            action_type = MouseAction.DRAG_END
-            self._dragging = False
-            self._drag_button = None
-            return
-        elif self._is_scroll_up(bstate):
-            button = MouseButton.WHEEL_UP
-            action_type = MouseAction.SCROLL
-        elif self._is_scroll_down(bstate):
-            button = MouseButton.WHEEL_DOWN
-            action_type = MouseAction.SCROLL
 
-        if button is None or action_type is None:
-            return
-
-        # Scroll → zoom (handled immediately, no world coordinates needed).
-        if button == MouseButton.WHEEL_UP:
-            self._camera.zoom_in()
-            return
-        if button == MouseButton.WHEEL_DOWN:
-            self._camera.zoom_out()
+        if bstate & curses.BUTTON1_RELEASED:
+            if self._dragging and self._drag_button == MouseButton.LEFT:
+                if not self._drag_confirmed:
+                    dist = abs(mx - self._press_mx) + abs(my - self._press_my)
+                    elapsed = time.monotonic() - self._press_time
+                    if dist <= CLICK_THRESHOLD or elapsed < CLICK_TIME_LIMIT:
+                        world_pos = self._screen_to_world(mx, my)
+                        logger.debug("Left click at screen(%d,%d) → world(%d,%d)", mx, my, world_pos.x, world_pos.y)
+                        self._event_bus.publish(
+                            Event(EventType.INPUT_CELL_TOGGLE, {"x": world_pos.x, "y": world_pos.y})
+                        )
+                self._dragging = False
+                self._drag_confirmed = False
+                self._drag_button = None
             return
 
-        # Middle-button drag → pan.
-        if button == MouseButton.MIDDLE and action_type == MouseAction.DRAG_END:
-            self._dragging = False
-            self._drag_button = None
-            return
-
-        # Left-button click → toggle cell.
-        if action_type == MouseAction.CLICK and button == MouseButton.LEFT:
+        if bstate & curses.BUTTON1_CLICKED:
             world_pos = self._screen_to_world(mx, my)
+            logger.debug("Left click at screen(%d,%d) → world(%d,%d)", mx, my, world_pos.x, world_pos.y)
             self._event_bus.publish(
                 Event(EventType.INPUT_CELL_TOGGLE, {"x": world_pos.x, "y": world_pos.y})
             )
             return
 
-        # Right-button click → erase cell.
-        if action_type == MouseAction.CLICK and button == MouseButton.RIGHT:
+        # --- Right button ---
+        if bstate & curses.BUTTON3_PRESSED:
+            self._dragging = True
+            self._drag_confirmed = False
+            self._drag_button = MouseButton.RIGHT
+            self._press_mx = mx
+            self._press_my = my
+            self._press_time = time.monotonic()
+            self._last_mx = mx
+            self._last_my = my
+            return
+
+        if bstate & curses.BUTTON3_RELEASED:
+            if self._dragging and self._drag_button == MouseButton.RIGHT:
+                if not self._drag_confirmed:
+                    dist = abs(mx - self._press_mx) + abs(my - self._press_my)
+                    elapsed = time.monotonic() - self._press_time
+                    if dist <= CLICK_THRESHOLD or elapsed < CLICK_TIME_LIMIT:
+                        world_pos = self._screen_to_world(mx, my)
+                        logger.debug("Right click at screen(%d,%d) → world(%d,%d)", mx, my, world_pos.x, world_pos.y)
+                        self._event_bus.publish(
+                            Event(EventType.INPUT_CELL_ERASE, {"x": world_pos.x, "y": world_pos.y})
+                        )
+                self._dragging = False
+                self._drag_confirmed = False
+                self._drag_button = None
+            return
+
+        if bstate & curses.BUTTON3_CLICKED:
             world_pos = self._screen_to_world(mx, my)
+            logger.debug("Right click at screen(%d,%d) → world(%d,%d)", mx, my, world_pos.x, world_pos.y)
             self._event_bus.publish(
                 Event(EventType.INPUT_CELL_ERASE, {"x": world_pos.x, "y": world_pos.y})
             )
             return
 
-        # Left-button drag → paint.
-        if button == MouseButton.LEFT and action_type in (
-            MouseAction.DRAG_START,
-            MouseAction.DRAG_CONTINUE,
-        ):
+        # --- Middle button (pan) ---
+        if bstate & curses.BUTTON2_PRESSED:
+            self._dragging = True
+            self._drag_confirmed = True
+            self._drag_button = MouseButton.MIDDLE
+            self._last_mx = mx
+            self._last_my = my
+            return
+
+        if bstate & curses.BUTTON2_RELEASED:
+            self._dragging = False
+            self._drag_confirmed = False
+            self._drag_button = None
+            return
+
+        if bstate & curses.BUTTON2_CLICKED:
+            return
+
+    def _handle_drag_motion(self, mx: int, my: int) -> None:
+        """Handle mouse motion during an active drag."""
+        if not self._drag_confirmed:
+            dist = abs(mx - self._press_mx) + abs(my - self._press_my)
+            elapsed = time.monotonic() - self._press_time
+            if dist > CLICK_THRESHOLD and elapsed >= CLICK_TIME_LIMIT:
+                self._drag_confirmed = True
+                logger.debug("Drag confirmed from (%d,%d)", self._press_mx, self._press_my)
+            else:
+                return
+
+        if self._drag_button == MouseButton.LEFT:
             world_pos = self._screen_to_world(mx, my)
             self._event_bus.publish(
                 Event(EventType.INPUT_CELL_PAINT, {"x": world_pos.x, "y": world_pos.y})
             )
-            return
+        elif self._drag_button == MouseButton.RIGHT:
+            world_pos = self._screen_to_world(mx, my)
+            self._event_bus.publish(
+                Event(EventType.INPUT_CELL_ERASE, {"x": world_pos.x, "y": world_pos.y})
+            )
+        elif self._drag_button == MouseButton.MIDDLE:
+            dx = self._last_mx - mx
+            dy = self._last_my - my
+            if dx != 0 or dy != 0:
+                self._camera.pan(dx, dy)
+
+        self._last_mx = mx
+        self._last_my = my
 
     # ------------------------------------------------------------------
     # Continuous input (called each frame for held buttons)
@@ -195,13 +261,14 @@ class InputHandler:
 
         Curses only delivers press/release events; continuous drag
         requires polling ``getmouse()`` each frame while a button
-        is held.
+        is held.  This is a fallback for terminals that don't
+        support REPORT_MOUSE_POSITION.
         """
         if not self._dragging or self._drag_button is None:
             return
 
         try:
-            _, mx, my, _, _ = curses.getmouse()
+            _, mx, my, _, bstate = curses.getmouse()
         except curses.error:
             return
 
@@ -210,11 +277,16 @@ class InputHandler:
             self._event_bus.publish(
                 Event(EventType.INPUT_CELL_PAINT, {"x": world_pos.x, "y": world_pos.y})
             )
+        elif self._drag_button == MouseButton.RIGHT:
+            world_pos = self._screen_to_world(mx, my)
+            self._event_bus.publish(
+                Event(EventType.INPUT_CELL_ERASE, {"x": world_pos.x, "y": world_pos.y})
+            )
         elif self._drag_button == MouseButton.MIDDLE:
-            # Pan by the delta from last position (screen pixels).
             dx = self._last_mx - mx
             dy = self._last_my - my
-            self._camera.pan(dx, dy)
+            if dx != 0 or dy != 0:
+                self._camera.pan(dx, dy)
 
         self._last_mx = mx
         self._last_my = my

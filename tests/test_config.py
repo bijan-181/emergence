@@ -10,9 +10,10 @@ class TestSettings:
 
     def test_defaults(self) -> None:
         s = Settings()
-        assert s.world.width == 80
-        assert s.world.height == 24
+        assert s.world.width == 200
+        assert s.world.height == 200
         assert s.simulation.target_fps == 10
+        assert s.simulation.render_fps == 60
         assert s.camera.default_zoom == 1.0
 
     def test_world_config(self) -> None:

@@ -24,6 +24,7 @@ from input.handler import InputHandler
 from input.keyboard import KeyAction
 from renderer.colors import init_colors
 from renderer.terminal import TerminalRenderer
+from ui.debug_overlay import DebugOverlay
 from ui.layout import Layout
 from ui.sidebar import Sidebar
 from ui.status import StatusBar
@@ -62,6 +63,14 @@ class App:
       to the physical terminal in one atomic operation.
     - On terminal resize (``KEY_RESIZE``), subwindows are destroyed
       and recreated; the camera viewport is updated to match.
+
+    Timing architecture:
+
+    - Render and simulation run on independent clocks.
+    - Render FPS controls only how often the screen is repainted.
+    - Simulation TPS controls only how often the Game of Life
+      advances a generation.
+    - Changing one never affects the other.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -76,7 +85,8 @@ class App:
         self._renderer: TerminalRenderer | None = None
         self._sidebar: Sidebar | None = None
         self._status_bar: StatusBar | None = None
-        self._clock: Clock | None = None
+        self._debug_overlay: DebugOverlay | None = None
+        self._render_clock = Clock(settings.simulation.render_fps)
         self._layout = Layout(
             sidebar_width=settings.ui.sidebar_width,
             status_height=settings.ui.status_height,
@@ -122,12 +132,22 @@ class App:
         sidebar_win = stdscr.subwin(sb_r.height, sb_r.width, sb_r.row, sb_r.col)
         status_win = stdscr.subwin(st_r.height, st_r.width, st_r.row, st_r.col)
 
-        self._camera = Camera(self._settings.camera, sim_r.width, sim_r.height)
+        self._camera = Camera(
+            self._settings.camera, sim_r.width, sim_r.height,
+            self._settings.world.width, self._settings.world.height,
+            cell_width=self._settings.renderer.cell_width,
+        )
         self._renderer = TerminalRenderer(sim_win, self._settings.renderer, self._camera)
-        self._sidebar = Sidebar(sidebar_win, sb_r.width, self._engine, self._camera)
+        self._sidebar = Sidebar(sidebar_win, sb_r.width, self._engine, self._camera,
+                                self._render_clock)
         self._status_bar = StatusBar(status_win, self._engine, self._camera)
         self._input_handler = InputHandler(
-            self._event_bus, self._camera, sim_offset_col=sim_r.col,
+            self._event_bus, self._camera, sim_area_width=sim_r.width,
+        )
+        self._debug_overlay = DebugOverlay(
+            self._engine, self._camera, self._input_handler,
+            self._render_clock,
+            self._settings.world.width, self._settings.world.height,
         )
 
     def _handle_resize(self, stdscr: Any) -> None:
@@ -158,17 +178,27 @@ class App:
             | curses.BUTTON1_PRESSED
             | curses.BUTTON1_RELEASED
             | curses.BUTTON2_CLICKED
+            | curses.BUTTON2_PRESSED
+            | curses.BUTTON2_RELEASED
             | curses.BUTTON3_CLICKED
+            | curses.BUTTON3_PRESSED
+            | curses.BUTTON3_RELEASED
         )
         if hasattr(curses, "BUTTON4_SCROLLED"):
             mouse_mask |= curses.BUTTON4_SCROLLED | curses.BUTTON5_SCROLLED
         else:
             mouse_mask |= curses.BUTTON4_CLICKED | curses.BUTTON5_CLICKED
-        curses.mousemask(mouse_mask)
+        if hasattr(curses, "BUTTON4_PRESSED"):
+            mouse_mask |= curses.BUTTON4_PRESSED | curses.BUTTON5_PRESSED
+        if hasattr(curses, "REPORT_MOUSE_POSITION"):
+            mouse_mask |= curses.REPORT_MOUSE_POSITION
+        avail, old = curses.mousemask(mouse_mask)
+        logger.info("mousemask: requested=%#x avail=%#x old=%#x", mouse_mask, avail, old)
+        if avail == 0:
+            logger.warning("Mouse events NOT supported by terminal – clicks will not work")
 
         # Build initial layout.
         self._build_panels(stdscr)
-        self._clock = Clock(self._settings.simulation.target_fps)
 
         # Subscribe mouse-cell events (these never re-enter the engine).
         self._event_bus.subscribe(EventType.INPUT_CELL_TOGGLE, self._on_cell_toggle)
@@ -179,9 +209,14 @@ class App:
         self._engine.randomize_world()
         self._engine.start()
 
+        # Timing state for independent render/sim loops.
+        render_fps = self._settings.simulation.render_fps
+        last_render = time.monotonic()
+        last_sim = time.monotonic()
+
         # ---- main loop ------------------------------------------------
         while self._running:
-            self._clock.tick()
+            now = time.monotonic()
 
             # 1. Input (non-blocking).
             key = stdscr.getch()
@@ -194,19 +229,26 @@ class App:
             # 1b. Continuous drag polling (held mouse buttons).
             self._input_handler.poll_drag()
 
-            # 2. Simulation step.
-            if self._engine.is_running:
+            # 2. Simulation step (independent of render timing).
+            sim_interval = 1.0 / max(self._engine.speed, 0.1)
+            if self._engine.is_running and (now - last_sim) >= sim_interval:
                 self._engine.step()
+                last_sim = now
 
-            # 3. Render — each subwindow writes independently, then one
-            #    atomic doupdate flushes everything.
-            self._renderer.render(self._engine.world)
-            self._sidebar.render()
-            self._status_bar.render()
-            curses.doupdate()
+            # 3. Render (independent of simulation timing).
+            render_interval = 1.0 / max(render_fps, 1)
+            if (now - last_render) >= render_interval:
+                self._render_clock.tick()
+                self._renderer.render(self._engine.world)
+                self._sidebar.render()
+                self._status_bar.render()
+                if self._debug_mode and self._debug_overlay is not None:
+                    self._debug_overlay.render(stdscr)
+                curses.doupdate()
+                last_render = now
 
-            # 4. Frame pacing.
-            self._clock.sleep_until_next()
+            # 4. Small sleep to prevent busy-waiting.
+            time.sleep(0.001)
 
     # ------------------------------------------------------------------
     # Input dispatch
@@ -221,6 +263,7 @@ class App:
 
         # Mouse events.
         if key == curses.KEY_MOUSE:
+            logger.debug("KEY_MOUSE received")
             try:
                 self._input_handler.handle_mouse()
             except curses.error:
@@ -262,6 +305,9 @@ class App:
             self._camera.pan(-self._camera._cfg.pan_step, 0)
         elif action == KeyAction.PAN_RIGHT:
             self._camera.pan(self._camera._cfg.pan_step, 0)
+        elif action == KeyAction.DEBUG_TOGGLE:
+            self._debug_mode = not self._debug_mode
+            logger.debug("Debug overlay: %s", "ON" if self._debug_mode else "OFF")
 
     # ------------------------------------------------------------------
     # Entry

@@ -7,10 +7,10 @@ computation to specialised subsystems (World, Rules, EventBus).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable
 
 from config.settings import Settings
-from core.clock import Clock
 from core.rules import GameOfLifeRules
 from core.state import EngineState
 from events.bus import EventBus
@@ -36,9 +36,11 @@ class Engine:
             settings.world.width,
             settings.world.height,
         )
-        self._clock = Clock(settings.simulation.target_fps)
         self._speed: float = settings.simulation.default_speed
         self._on_generation_callback: Callable[[], None] | None = None
+        self._step_times: list[float] = []
+        self._last_step_time: float = 0.0
+        self._max_samples = 60
 
     # ------------------------------------------------------------------
     # Public properties
@@ -57,8 +59,12 @@ class Engine:
         return self._speed
 
     @property
-    def fps(self) -> float:
-        return self._clock.fps
+    def tps(self) -> float:
+        """Measured simulation ticks per second (rolling average)."""
+        if not self._step_times:
+            return 0.0
+        avg_dt = sum(self._step_times) / len(self._step_times)
+        return 1.0 / max(avg_dt, 0.0001)
 
     @property
     def generation(self) -> int:
@@ -89,7 +95,8 @@ class Engine:
         if self._state == EngineState.RUNNING:
             return
         self._state = EngineState.RUNNING
-        self._clock.reset()
+        self._last_step_time = 0.0
+        self._step_times.clear()
         logger.info("Engine started")
         self._event_bus.publish(Event(EventType.ENGINE_STARTED))
 
@@ -106,13 +113,15 @@ class Engine:
         if self._state != EngineState.PAUSED:
             return
         self._state = EngineState.RUNNING
-        self._clock.reset()
+        self._last_step_time = 0.0
+        self._step_times.clear()
         logger.info("Engine resumed")
         self._event_bus.publish(Event(EventType.ENGINE_RESUMED))
 
     def step(self) -> None:
         """Advance exactly one generation (regardless of running state)."""
         self._advance_one_generation()
+        self._track_step_time()
         logger.debug("Single step → gen %d", self._world.generation)
 
     def stop(self) -> None:
@@ -143,7 +152,8 @@ class Engine:
         """Clear the world and reset generation counter."""
         self._world.clear()
         self._world.reset_generation()
-        self._clock.reset()
+        self._step_times.clear()
+        self._last_step_time = 0.0
         logger.info("World reset")
         self._event_bus.publish(Event(EventType.SIMULATION_RESET))
         self._notify_generation()
@@ -158,7 +168,6 @@ class Engine:
             self._settings.simulation.min_speed,
             min(speed, self._settings.simulation.max_speed),
         )
-        self._clock.target_fps = int(self._speed)
         logger.debug("Speed set to %.1f", self._speed)
 
     def increase_speed(self) -> None:
@@ -170,6 +179,16 @@ class Engine:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _track_step_time(self) -> None:
+        """Record the time between simulation steps for TPS measurement."""
+        now = time.monotonic()
+        if self._last_step_time > 0:
+            dt = now - self._last_step_time
+            self._step_times.append(dt)
+            if len(self._step_times) > self._max_samples:
+                self._step_times.pop(0)
+        self._last_step_time = now
 
     def _advance_one_generation(self) -> None:
         """Compute the next generation and commit it."""

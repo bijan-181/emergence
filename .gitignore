@@ -101,3 +101,7 @@ benchmarks/results/
 
 # Generated files
 *.generated
+
+# Graphify analysis output
+.graphify_*
+graphify-out/

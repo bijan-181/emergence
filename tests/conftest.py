@@ -34,5 +34,5 @@ def small_world() -> World:
 
 @pytest.fixture
 def medium_world() -> World:
-    """80×24 world (default size)."""
-    return World(80, 24)
+    """200×200 world (default size)."""
+    return World(200, 200)

@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 class WorldConfig:
     """World configuration."""
 
-    width: int = 80
-    height: int = 24
+    width: int = 200
+    height: int = 200
     initial_alive_ratio: float = 0.3
 
 
@@ -25,6 +25,7 @@ class SimulationConfig:
     """Simulation configuration."""
 
     target_fps: int = 10
+    render_fps: int = 60
     min_speed: float = 0.1
     max_speed: float = 60.0
     speed_step: float = 1.0

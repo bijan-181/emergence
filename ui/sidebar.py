@@ -13,6 +13,7 @@ from renderer.colors import PAIR_SIDEBAR_TITLE as _pair_title
 
 if TYPE_CHECKING:
     from core.engine import Engine
+    from core.clock import Clock
     from camera.camera import Camera
 
 
@@ -24,6 +25,7 @@ class Sidebar:
         width: Width in columns.
         engine: Simulation engine for status data.
         camera: Camera for viewport data.
+        render_clock: Render clock for FPS measurement.
     """
 
     def __init__(
@@ -32,11 +34,13 @@ class Sidebar:
         width: int,
         engine: Engine,
         camera: Camera,
+        render_clock: Clock,
     ) -> None:
         self._win = win
         self._width = width
         self._engine = engine
         self._camera = camera
+        self._render_clock = render_clock
         self._current_tool: str = "paint"
 
     def set_tool(self, tool: str) -> None:
@@ -105,7 +109,8 @@ class Sidebar:
             ("Simulation", [
                 f"Generation:   {e.generation}",
                 f"State:        {state_str}",
-                f"FPS:          {e.fps:.1f}",
+                f"Render FPS:   {self._render_clock.fps:.1f}",
+                f"Sim TPS:      {e.tps:.1f}",
                 f"Speed:        {e.speed:.1f} gen/s",
             ]),
             ("World", [
@@ -129,6 +134,7 @@ class Sidebar:
                 "+/-    Speed +/-",
                 "0      Reset zoom",
                 "Arrows Pan",
+                "F1     Debug overlay",
                 "ESC    Quit",
                 "LClick Toggle cell",
                 "RClick Erase cell",

@@ -47,10 +47,10 @@ class TerminalRenderer:
     def render(self, world: World) -> None:
         """Overwrite the visible portion of *world* into the subwindow.
 
-        Strategy: iterate visible cells and overwrite each position.
-        No ``erase()`` is called — existing content is simply replaced.
-        This eliminates flicker caused by clear-then-redraw cycles.
+        The window is cleared before drawing to prevent stale pixels
+        after zoom or pan changes.
         """
+        self._win.erase()
         grid = world.get_grid()
         x_start, y_start, x_end, y_end = self._camera.visible_bounds()
 

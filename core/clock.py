@@ -1,4 +1,9 @@
-"""Simulation timing and control."""
+"""Timing measurement and frame pacing.
+
+The Clock is a passive measurement tool — it does not drive any
+loop.  Callers decide when to call :meth:`tick` and
+:meth:`sleep_until_next`.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +11,12 @@ import time
 
 
 class Clock:
-    """Controls simulation speed and provides timing information.
-
-    The clock does **not** drive the main loop — the caller
-    decides when to call :meth:`tick`.  This keeps the engine
-    decoupled from any specific timing mechanism.
+    """Measures frames per second using a rolling window.
 
     Parameters:
-        target_fps: Desired frames (generations) per second.
+        target_fps: Desired frames per second (used for
+                    :meth:`sleep_until_next` pacing and as the
+                    initial reported FPS before any ticks).
     """
 
     def __init__(self, target_fps: int = 10) -> None:
@@ -29,8 +32,11 @@ class Clock:
 
     @property
     def fps(self) -> float:
-        """Measured frames per second (rolling average)."""
-        if not self._frame_times:
+        """Measured frames per second (rolling average).
+
+        Returns ``target_fps`` until enough samples are collected.
+        """
+        if len(self._frame_times) < 2:
             return float(self.target_fps)
         return 1.0 / (sum(self._frame_times) / len(self._frame_times))
 
