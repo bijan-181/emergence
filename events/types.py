@@ -37,6 +37,14 @@ class EventType(Enum):
     SIMULATION_SPEED_CHANGED = auto()
     SIMULATION_RESET = auto()
 
+    # Agent events
+    AGENT_CREATED = auto()
+    AGENT_DECISION = auto()
+    AGENT_ACTION = auto()
+    AGENT_REWARD = auto()
+    AGENT_LEARNED = auto()
+    AGENT_DESTROYED = auto()
+
 
 @dataclass(frozen=True, slots=True)
 class Event:

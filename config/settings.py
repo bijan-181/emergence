@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from agents.config import AgentConfig
+
 
 @dataclass
 class WorldConfig:
@@ -74,3 +76,4 @@ class Settings:
     camera: CameraConfig = field(default_factory=CameraConfig)
     renderer: RendererConfig = field(default_factory=RendererConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    agents: AgentConfig = field(default_factory=AgentConfig)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from config.settings import Settings
 from core.rules import GameOfLifeRules
@@ -16,6 +16,9 @@ from core.state import EngineState
 from events.bus import EventBus
 from events.types import Event, EventType
 from world.world import World
+
+if TYPE_CHECKING:
+    from agents.manager import AgentManager
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,7 @@ class Engine:
         )
         self._speed: float = settings.simulation.default_speed
         self._on_generation_callback: Callable[[], None] | None = None
+        self._agent_manager: AgentManager | None = None
         self._step_times: list[float] = []
         self._last_step_time: float = 0.0
         self._max_samples = 60
@@ -89,6 +93,15 @@ class Engine:
     def set_on_generation(self, callback: Callable[[], None]) -> None:
         """Register a callback invoked after each generation advances."""
         self._on_generation_callback = callback
+
+    def set_agent_manager(self, manager: AgentManager) -> None:
+        """Attach an AgentManager to the engine's generation cycle."""
+        self._agent_manager = manager
+        manager.set_world(self._world)
+
+    @property
+    def agent_manager(self) -> AgentManager | None:
+        return self._agent_manager
 
     def start(self) -> None:
         """Start the simulation."""
@@ -193,6 +206,10 @@ class Engine:
     def _advance_one_generation(self) -> None:
         """Compute the next generation and commit it."""
         self._event_bus.publish(Event(EventType.GENERATION_BEGIN))
+
+        if self._agent_manager is not None:
+            self._agent_manager.step(self._world)
+
         next_cells = GameOfLifeRules.compute_next(self._world.get_grid())
         self._world.get_grid().set_array(next_cells)
         self._world.advance_generation()
