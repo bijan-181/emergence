@@ -21,6 +21,7 @@ class KeyAction(Enum):
     PAN_LEFT = auto()
     PAN_RIGHT = auto()
     DEBUG_TOGGLE = auto()
+    LOAD_TARGET = auto()
     QUIT = auto()
 
 
@@ -56,5 +57,7 @@ def build_default_bindings(curses_mod: object) -> dict[int, KeyAction]:
         curses_mod.KEY_LEFT: KeyAction.PAN_LEFT,
         curses_mod.KEY_RIGHT: KeyAction.PAN_RIGHT,
         curses_mod.KEY_F1: KeyAction.DEBUG_TOGGLE,
+        ord("t"): KeyAction.LOAD_TARGET,
+        ord("T"): KeyAction.LOAD_TARGET,
         27: KeyAction.QUIT,  # ESC
     }

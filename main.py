@@ -14,6 +14,12 @@ import os
 import time
 from typing import Any
 
+import numpy as np
+
+from agents.manager import AgentManager
+from agents.metrics import AgentMetrics
+from agents.pattern import PatternGenerator
+from agents.reactive import ReactiveAgent
 from camera.camera import Camera
 from config.settings import Settings
 from core.clock import Clock
@@ -80,6 +86,11 @@ class App:
         self._running = True
         self._debug_mode = False
 
+        self._agent_manager = AgentManager(self._event_bus)
+        self._agent_metrics = AgentMetrics(self._event_bus)
+        self._pattern_generator = PatternGenerator()
+        self._target_loaded = False
+
         self._camera: Camera | None = None
         self._input_handler: InputHandler | None = None
         self._renderer: TerminalRenderer | None = None
@@ -139,7 +150,7 @@ class App:
         )
         self._renderer = TerminalRenderer(sim_win, self._settings.renderer, self._camera)
         self._sidebar = Sidebar(sidebar_win, sb_r.width, self._engine, self._camera,
-                                self._render_clock)
+                                self._render_clock, self._agent_manager)
         self._status_bar = StatusBar(status_win, self._engine, self._camera)
         self._input_handler = InputHandler(
             self._event_bus, self._camera, sim_area_width=sim_r.width,
@@ -199,6 +210,11 @@ class App:
 
         # Build initial layout.
         self._build_panels(stdscr)
+
+        # Create and register agent.
+        agent = ReactiveAgent("main-agent", position=(100, 100), local_radius=20)
+        self._agent_manager.register(agent)
+        self._engine.set_agent_manager(self._agent_manager)
 
         # Subscribe mouse-cell events (these never re-enter the engine).
         self._event_bus.subscribe(EventType.INPUT_CELL_TOGGLE, self._on_cell_toggle)
@@ -308,6 +324,23 @@ class App:
         elif action == KeyAction.DEBUG_TOGGLE:
             self._debug_mode = not self._debug_mode
             logger.debug("Debug overlay: %s", "ON" if self._debug_mode else "OFF")
+        elif action == KeyAction.LOAD_TARGET:
+            self._load_default_target()
+
+    # ------------------------------------------------------------------
+    # Target loading
+    # ------------------------------------------------------------------
+
+    def _load_default_target(self) -> None:
+        """Load a default cross-shaped target pattern."""
+        target = np.zeros((20, 20), dtype=np.uint8)
+        target[8:12, 2:18] = 1  # horizontal bar
+        target[2:18, 8:12] = 1  # vertical bar
+        self._agent_manager.set_target(target)
+        self._target_loaded = True
+        if self._sidebar is not None:
+            self._sidebar.set_target_loaded(True)
+        logger.info("Target loaded: 20x20 cross pattern")
 
     # ------------------------------------------------------------------
     # Entry

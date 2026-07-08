@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from renderer.colors import PAIR_SIDEBAR_TITLE as _pair_title
 
 if TYPE_CHECKING:
+    from agents.manager import AgentManager
     from core.engine import Engine
     from core.clock import Clock
     from camera.camera import Camera
@@ -26,6 +27,7 @@ class Sidebar:
         engine: Simulation engine for status data.
         camera: Camera for viewport data.
         render_clock: Render clock for FPS measurement.
+        agent_manager: Agent manager for agent stats.
     """
 
     def __init__(
@@ -35,29 +37,31 @@ class Sidebar:
         engine: Engine,
         camera: Camera,
         render_clock: Clock,
+        agent_manager: "AgentManager | None" = None,
     ) -> None:
         self._win = win
         self._width = width
         self._engine = engine
         self._camera = camera
         self._render_clock = render_clock
+        self._agent_manager = agent_manager
         self._current_tool: str = "paint"
+        self._has_target: bool = False
 
     def set_tool(self, tool: str) -> None:
         """Update the currently active tool name."""
         self._current_tool = tool
+
+    def set_target_loaded(self, loaded: bool) -> None:
+        """Update whether a target pattern is loaded."""
+        self._has_target = loaded
 
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
     def render(self) -> None:
-        """Draw the sidebar contents into its subwindow.
-
-        Uses overwrite-only strategy — each cell position is written
-        unconditionally, replacing whatever was there before.  No
-        ``erase()`` call.
-        """
+        """Draw the sidebar contents into its subwindow."""
         max_row, max_col = self._win.getmaxyx()
         sections = self._build_sections()
         row = 0
@@ -105,7 +109,7 @@ class Sidebar:
         cam = self._camera
         state_str = "RUNNING" if e.is_running else ("PAUSED" if e.is_paused else "IDLE")
 
-        return [
+        sections = [
             ("Simulation", [
                 f"Generation:   {e.generation}",
                 f"State:        {state_str}",
@@ -122,6 +126,23 @@ class Sidebar:
                 f"Offset:       ({cam.offset_x:.0f}, {cam.offset_y:.0f})",
                 f"Visible:      {cam.visible_width_cells()}x{cam.visible_height_cells()}",
             ]),
+        ]
+
+        # Agent section
+        if self._agent_manager is not None:
+            agents = self._agent_manager.agents
+            sections.append(("Agents", [
+                f"Active:       {len(agents)}",
+                f"Target:       {'Loaded' if self._has_target else 'None'}",
+            ]))
+            for agent in agents[:3]:
+                sections.append((f"  {agent.agent_id}", [
+                    f"Type:         {agent.agent_type.name}",
+                    f"Actions:      {agent.state.total_actions}",
+                    f"Pos:          {agent.position}",
+                ]))
+
+        sections.extend([
             ("Tool", [
                 f"Current:      {self._current_tool}",
             ]),
@@ -133,6 +154,7 @@ class Sidebar:
                 "G      Randomize",
                 "+/-    Speed +/-",
                 "0      Reset zoom",
+                "T      Load target",
                 "Arrows Pan",
                 "F1     Debug overlay",
                 "ESC    Quit",
@@ -142,10 +164,6 @@ class Sidebar:
                 "Scroll Zoom",
                 "MMouse Pan",
             ]),
-            ("Future", [
-                "  [Agent status]",
-                "  [Target info]",
-                "  [Evolution]",
-                "  [Metrics]",
-            ]),
-        ]
+        ])
+
+        return sections
